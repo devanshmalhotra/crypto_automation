@@ -1,81 +1,128 @@
 import requests
+import time
+import datetime
 import pandas as pd
-from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
-# -------- CONFIG --------
-ALERT_THRESHOLD = 6  # % price change
-TOP_N = 50           # Top volume pairs to check
+# ------------------ CONFIG ------------------
 
-# -------- HELPERS --------
-def get_top_volume_symbols(limit=TOP_N):
-    url = "https://min-api.cryptocompare.com/data/top/totalvolfull"
-    params = {"limit": limit, "tsym": "USDT"}
+api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
+alert_threshold = 6  # % change
+sender_email = "devanshmalhotra98@gmail.com"
+sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+receiver_email = "devanshmalhotra98@gmail.com"
+
+# ------------------ EMAIL FUNCTION ------------------
+
+def send_email_alert(alerts, sender_email, sender_password, receiver_email):
+    subject = "🚨 Crypto Price Alert: 30-min Movers"
+    body = "The following crypto pairs moved more than 6% in the last 30 minutes:\n\n"
+    for symbol, change in alerts:
+        body += f"{symbol}: {change:.2f}%\n"
+
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = receiver_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, receiver_email, msg.as_string())
+        server.quit()
+        print("📧 Email alert sent!")
+    except Exception as e:
+        print("⚠️ Failed to send email:", e)
+
+# ------------------ CRYPTO FUNCTIONS ------------------
+
+def get_top_volume_symbols(api_key, limit=50, quote='USDT'):
+    url = "https://min-api.cryptocompare.com/data/top/volumes"
+    params = {'tsym': quote, 'limit': limit, 'api_key': api_key}
     response = requests.get(url, params=params)
-    data = response.json().get("Data", [])
-    
-    symbols = []
-    for coin in data:
-        info = coin.get("CoinInfo", {})
-        if "Name" in info:
-            symbols.append(info["Name"] + "USDT")
-    return symbols
+    data = response.json()
 
-def get_30min_change(symbol):
-    end_time = int(datetime.utcnow().timestamp())
-    start_time = int((datetime.utcnow() - timedelta(minutes=30)).timestamp())
+    if data.get('Response') != 'Success':
+        print("⚠️ Error fetching top volume symbols:", data)
+        return []
 
-    url = f"https://min-api.cryptocompare.com/data/v2/histominute"
-    params = {
-        "fsym": symbol.replace("USDT", ""),
-        "tsym": "USDT",
-        "limit": 30,
-        "toTs": end_time
-    }
+    try:
+        return [coin['SYMBOL'] for coin in data['Data']]
+    except KeyError as e:
+        print(f"⚠️ Could not extract symbols: {e}")
+        return []
 
+def get_price(api_key, symbol, quote='USDT'):
+    url = "https://min-api.cryptocompare.com/data/price"
+    params = {'fsym': symbol, 'tsyms': quote, 'api_key': api_key}
     response = requests.get(url, params=params)
-    data = response.json().get("Data", {}).get("Data", [])
+    data = response.json()
+    return data.get(quote)
 
-    if len(data) < 2:
-        return None
-
-    price_30min_ago = data[0]["close"]
-    price_now = data[-1]["close"]
-    change_pct = ((price_now - price_30min_ago) / price_30min_ago) * 100
-
-    return round(change_pct, 2)
-
-def main_job():
-    symbols = get_top_volume_symbols()
-    results = []
+def get_30min_movers(api_key, symbols, quote='USDT', alert_threshold=6):
+    movers = []
+    alerts = []
 
     for symbol in symbols:
         try:
-            change = get_30min_change(symbol)
-            if change is not None:
-                results.append({
-                    "symbol": symbol,
-                    "change (%)": change
-                })
+            price_now = get_price(api_key, symbol, quote)
+            time.sleep(1)  # Rate limit
+            price_30min_ago = get_historical_price(api_key, symbol, quote, minutes_back=30)
+            if not price_now or not price_30min_ago:
+                continue
+
+            change = ((price_now - price_30min_ago) / price_30min_ago) * 100
+            movers.append({'symbol': symbol, 'price_now': price_now, 'price_30min_ago': price_30min_ago, 'change (%)': change})
+
+            if abs(change) >= alert_threshold:
+                alerts.append((symbol, change))
         except Exception as e:
-            print(f"Error checking {symbol}: {e}")
+            print(f"⚠️ Error processing {symbol}: {e}")
 
-    df = pd.DataFrame(results)
-    if df.empty:
-        print("No data to show.")
-        return
+    df = pd.DataFrame(movers).sort_values(by='change (%)', ascending=False)
+    return df, alerts
 
-    df = df.sort_values(by="change (%)", ascending=False)
-    movers = df[abs(df["change (%)"]) >= ALERT_THRESHOLD]
+def get_historical_price(api_key, symbol, quote='USDT', minutes_back=30):
+    url = "https://min-api.cryptocompare.com/data/v2/histominute"
+    params = {'fsym': symbol, 'tsym': quote, 'limit': 30, 'api_key': api_key}
+    response = requests.get(url, params=params)
+    data = response.json()
 
-    print("\n📊 Top 30-Min Movers:")
-    print(df.head(10).to_string(index=False))
+    if data.get("Response") != "Success":
+        return None
 
-    if not movers.empty:
-        print("\n🚨 Alerts (>{}%)".format(ALERT_THRESHOLD))
-        print(movers.to_string(index=False))
+    prices = data["Data"]["Data"]
+    if len(prices) >= 1:
+        return prices[0]['close']
+    return None
+
+# ------------------ MAIN JOB ------------------
+
+def main_job():
+    print(f"\n🕒 Running check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    symbols = get_top_volume_symbols(api_key, limit=50)
+    df, alerts = get_30min_movers(api_key, symbols, alert_threshold=alert_threshold)
+
+    if not df.empty:
+        print("\n🔝 Top Movers (30 min):")
+        print(df[['symbol', 'change (%)']].head(10))
     else:
-        print("\nNo alerts at this time.")
+        print("\n📭 No price data available.")
 
-# -------- RUN ONCE --------
-if __name__ == "__main__":
-    main_job()
+    if alerts:
+        print("\n🚨 Alerts triggered:")
+        for symbol, change in alerts:
+            print(f"{symbol}: {change:.2f}%")
+        send_email_alert(alerts, sender_email, sender_password, receiver_email)
+    else:
+        print("\n✅ No alerts triggered.")
+
+# ------------------ MAIN EXECUTION ------------------
+
+# Run the main job once immediately
+main_job()
+
