@@ -2,7 +2,7 @@ name: Run Crypto Alert
 
 on:
   schedule:
-    - cron: '57,27 * * * *'  # Every 30 minutes UTC
+    - cron: '15,27 * * * *'  # Every 30 minutes UTC
   workflow_dispatch:        # Manual trigger
 
 jobs:
