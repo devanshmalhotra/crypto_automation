@@ -1,0 +1,7 @@
+requests
+time
+schedule
+pandas as pd
+smtplib
+email
+email.mime.multipart 
