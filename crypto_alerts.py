@@ -10,9 +10,9 @@ from email.mime.multipart import MIMEMultipart
 
 api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
 alert_threshold = 6  # % change
-sender_email = "your_email@gmail.com"
-sender_password = "your_app_password"  # App password if using Gmail 2FA
-receiver_email = "receiver_email@gmail.com"
+sender_email = "devanshmalhotra98@gmail.com"
+sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+receiver_email = "devanshmalhotra98@gmail.com"
 
 # Static list of coins
 static_symbols = [
