@@ -10,9 +10,19 @@ from email.mime.multipart import MIMEMultipart
 
 api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
 alert_threshold = 6  # % change
-sender_email = "devanshmalhotra98@gmail.com"
-sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
-receiver_email = "devanshmalhotra98@gmail.com"
+sender_email = "your_email@gmail.com"
+sender_password = "your_app_password"  # App password if using Gmail 2FA
+receiver_email = "receiver_email@gmail.com"
+
+# Static list of coins
+static_symbols = [
+    "ALCH", "ZEREBRO", "ALPACA", "RARE", "BIO", "WIF", "NKN", "VOXEL", "BAN", "SHELL",
+    "AI16Z", "GRIFFAIN", "MOODENG", "CHILLGUY", "HMSTR", "ZEN", "MUBARAK", "CETUS",
+    "GRASS", "SPX", "SOL", "ARC", "PNUT", "GAS", "PIXEL", "SUPER", "XRP", "STRK",
+    "ENJ", "BTCDOM", "LUMIA", "THETA", "ANKR", "BLUR", "MEW", "ATOM", "RONIN",
+    "MAGIC", "1000PEPE", "TRB", "PIPPIN", "ALPHA", "HIPPO", "DF", "KOMA", "EIGEN",
+    "FORTH", "GALA", "SAFE", "ARK", "DUSK", "VTHO", "AAVE", "MASK"
+]
 
 # ------------------ EMAIL FUNCTION ------------------
 
@@ -40,28 +50,26 @@ def send_email_alert(alerts, sender_email, sender_password, receiver_email):
 
 # ------------------ CRYPTO FUNCTIONS ------------------
 
-def get_top_volume_symbols(api_key, limit=50, quote='USDT'):
-    url = "https://min-api.cryptocompare.com/data/top/volumes"
-    params = {'tsym': quote, 'limit': limit, 'api_key': api_key}
-    response = requests.get(url, params=params)
-    data = response.json()
-
-    if data.get('Response') != 'Success':
-        print("⚠️ Error fetching top volume symbols:", data)
-        return []
-
-    try:
-        return [coin['SYMBOL'] for coin in data['Data']]
-    except KeyError as e:
-        print(f"⚠️ Could not extract symbols: {e}")
-        return []
-
 def get_price(api_key, symbol, quote='USDT'):
     url = "https://min-api.cryptocompare.com/data/price"
     params = {'fsym': symbol, 'tsyms': quote, 'api_key': api_key}
     response = requests.get(url, params=params)
     data = response.json()
     return data.get(quote)
+
+def get_historical_price(api_key, symbol, quote='USDT', minutes_back=30):
+    url = "https://min-api.cryptocompare.com/data/v2/histominute"
+    params = {'fsym': symbol, 'tsym': quote, 'limit': minutes_back, 'api_key': api_key}
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    if data.get("Response") != "Success":
+        return None
+
+    prices = data["Data"]["Data"]
+    if prices:
+        return prices[0]['close']
+    return None
 
 def get_30min_movers(api_key, symbols, quote='USDT', alert_threshold=6):
     movers = []
@@ -70,7 +78,7 @@ def get_30min_movers(api_key, symbols, quote='USDT', alert_threshold=6):
     for symbol in symbols:
         try:
             price_now = get_price(api_key, symbol, quote)
-            time.sleep(1)  # Rate limit
+            time.sleep(1)  # To respect rate limits
             price_30min_ago = get_historical_price(api_key, symbol, quote, minutes_back=30)
             if not price_now or not price_30min_ago:
                 continue
@@ -86,26 +94,11 @@ def get_30min_movers(api_key, symbols, quote='USDT', alert_threshold=6):
     df = pd.DataFrame(movers).sort_values(by='change (%)', ascending=False)
     return df, alerts
 
-def get_historical_price(api_key, symbol, quote='USDT', minutes_back=30):
-    url = "https://min-api.cryptocompare.com/data/v2/histominute"
-    params = {'fsym': symbol, 'tsym': quote, 'limit': 30, 'api_key': api_key}
-    response = requests.get(url, params=params)
-    data = response.json()
-
-    if data.get("Response") != "Success":
-        return None
-
-    prices = data["Data"]["Data"]
-    if len(prices) >= 1:
-        return prices[0]['close']
-    return None
-
-# ------------------ MAIN JOB ------------------
+# ------------------ MAIN ------------------
 
 def main_job():
     print(f"\n🕒 Running check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    symbols = get_top_volume_symbols(api_key, limit=50)
-    df, alerts = get_30min_movers(api_key, symbols, alert_threshold=alert_threshold)
+    df, alerts = get_30min_movers(api_key, static_symbols, alert_threshold=alert_threshold)
 
     if not df.empty:
         print("\n🔝 Top Movers (30 min):")
@@ -121,8 +114,5 @@ def main_job():
     else:
         print("\n✅ No alerts triggered.")
 
-# ------------------ MAIN EXECUTION ------------------
-
-# Run the main job once immediately
-main_job()
-
+if __name__ == "__main__":
+    main_job()
