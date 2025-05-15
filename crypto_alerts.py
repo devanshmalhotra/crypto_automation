@@ -14,7 +14,7 @@ api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
 sender_email = "devanshmalhotra98@gmail.com"
 sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
 receiver_email = "devanshmalhotra98@gmail.com"
-range_threshold_percent = 5.0
+range_threshold_percent = 10.0
 cooldown_hours = 8
 cooldown_file = "cooldown_tracker.json"
 
