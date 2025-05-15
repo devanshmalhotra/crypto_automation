@@ -14,11 +14,14 @@ api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
 sender_email = "devanshmalhotra98@gmail.com"
 sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
 receiver_email = "devanshmalhotra98@gmail.com"
-range_threshold_percent = 10.0
+
+range_threshold_percent = 10.0  # Narrow range threshold (10%)
+volume_threshold = 1000  # Minimum volume for volume filter alerts
 cooldown_hours = 8
 cooldown_file = "cooldown_tracker.json"
 
-static_symbols =[
+static_symbols = [
+    # Your list of 100 coins
     "ALCH", "ZEREBRO", "ALPACA", "RARE", "BIO", "WIF", "NKN", "VOXEL", "BAN", "SHELL",
     "AI16Z", "GRIFFAIN", "MOODENG", "CHILLGUY", "HMSTR", "ZEN", "MUBARAK", "CETUS",
     "GRASS", "SPX", "SOL", "ARC", "PNUT", "GAS", "PIXEL", "SUPER", "XRP", "STRK",
@@ -36,32 +39,13 @@ static_symbols =[
     "RAYSOL", "ALGO", "ZRO", "SWARMS", "VINE", "BANANA", "STX", "POL"
 ]
 
-# ------------------ COOLDOWN UTILS ------------------
-
-def load_cooldown_tracker():
-    if os.path.exists(cooldown_file):
-        with open(cooldown_file, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_cooldown_tracker(tracker):
-    with open(cooldown_file, 'w') as f:
-        json.dump(tracker, f)
-
-def is_in_cooldown(symbol, tracker):
-    now = time.time()
-    last_alert_time = tracker.get(symbol)
-    if last_alert_time and now - last_alert_time < cooldown_hours * 3600:
-        return True
-    return False
-
 # ------------------ EMAIL FUNCTION ------------------
 
-def send_email_alert(breakouts):
-    subject = "🚨 Crypto Breakout Alert (15h consolidation)"
-    body = "These coins broke out of a 15-hour tight range (<5%) on the last closed hourly candle:\n\n"
-    for symbol, direction in breakouts:
-        body += f"{symbol}: {direction.upper()}\n"
+def send_email_alert(alerts, sender_email, sender_password, receiver_email, subject_prefix):
+    subject = f"🚨 Crypto Alert: {subject_prefix} Breakouts Detected"
+    body = f"The following crypto pairs triggered breakouts:\n\n"
+    for symbol, direction, volume, range_pct in alerts:
+        body += f"{symbol}: Breakout {direction.upper()}, Volume: {volume:.0f}, Range: {range_pct:.2f}%\n"
 
     msg = MIMEMultipart()
     msg['From'] = sender_email
@@ -75,76 +59,131 @@ def send_email_alert(breakouts):
         server.login(sender_email, sender_password)
         server.sendmail(sender_email, receiver_email, msg.as_string())
         server.quit()
-        print("📧 Email alert sent!")
+        print(f"📧 Email alert sent for {subject_prefix} breakouts!")
     except Exception as e:
         print("⚠️ Failed to send email:", e)
 
-# ------------------ DATA FETCHING ------------------
+# ------------------ COOLDOWN HANDLER ------------------
 
-def get_ohlcv_hourly(symbol, quote='USDT', limit=16):
+def load_cooldown():
+    if os.path.exists(cooldown_file):
+        with open(cooldown_file, 'r') as f:
+            return json.load(f)
+    else:
+        return {}
+
+def save_cooldown(cooldown_data):
+    with open(cooldown_file, 'w') as f:
+        json.dump(cooldown_data, f)
+
+def is_in_cooldown(symbol, cooldown_data):
+    if symbol not in cooldown_data:
+        return False
+    last_alert_time = datetime.datetime.fromisoformat(cooldown_data[symbol])
+    return (datetime.datetime.utcnow() - last_alert_time).total_seconds() < cooldown_hours * 3600
+
+def update_cooldown(symbol, cooldown_data):
+    cooldown_data[symbol] = datetime.datetime.utcnow().isoformat()
+
+# ------------------ CRYPTO FUNCTIONS ------------------
+
+def get_hourly_candles(symbol, limit=20, aggregate=1, exchange=''):
     url = "https://min-api.cryptocompare.com/data/v2/histohour"
-    params = {'fsym': symbol, 'tsym': quote, 'limit': limit, 'api_key': api_key}
+    params = {
+        'fsym': symbol,
+        'tsym': 'USDT',
+        'limit': limit,
+        'aggregate': aggregate,
+        'e': exchange,
+        'api_key': api_key
+    }
     response = requests.get(url, params=params)
     data = response.json()
+
     if data.get("Response") != "Success":
+        print(f"⚠️ Failed to fetch candles for {symbol}: {data.get('Message')}")
         return None
-    return pd.DataFrame(data["Data"]["Data"])
 
-# ------------------ STRATEGY LOGIC ------------------
+    df = pd.DataFrame(data["Data"]["Data"])
+    return df
 
-def check_consolidation_and_breakout(df, threshold=10.0):
-    recent = df.iloc[-16:-1]  # 15 candles before last candle
+def check_consolidation_and_breakout(df, threshold=10.0, volume_threshold=0):
+    if df is None or len(df) < 17:
+        return None  # Not enough data
+
+    recent = df.iloc[-16:-1]  # 15 candles before latest
     high = recent['high'].max()
     low = recent['low'].min()
     range_pct = (high - low) / low * 100
 
-    last_candle = df.iloc[-1]  # latest candle (could be still forming)
+    last_candle = df.iloc[-1]  # latest candle (may be still forming)
 
     if range_pct <= threshold:
-        if last_candle['high'] > high:
-            return "breakout_up"
-        elif last_candle['low'] < low:
-            return "breakout_down"
+        breakout_up = last_candle['high'] > high
+        breakout_down = last_candle['low'] < low
+        volume_ok = last_candle['volumefrom'] >= volume_threshold
+
+        if breakout_up or breakout_down:
+            return {
+                'breakout': 'up' if breakout_up else 'down',
+                'volume': last_candle['volumefrom'],
+                'volume_ok': volume_ok,
+                'range_pct': range_pct,
+                'high': high,
+                'low': low
+            }
     return None
 
-# ------------------ MAIN JOB ------------------
+# ------------------ MAIN ------------------
 
 def main_job():
-    print(f"\n🕒 Running breakout check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    breakouts = []
-    cooldown_tracker = load_cooldown_tracker()
+    print(f"\n🕒 Running check at {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    cooldown_data = load_cooldown()
+
+    signals_with_volume = []
+    signals_without_volume = []
 
     for symbol in static_symbols:
-        if is_in_cooldown(symbol, cooldown_tracker):
-            print(f"⏳ Skipping {symbol} (in cooldown)")
+        df = get_hourly_candles(symbol)
+        if df is None:
+            print(f"⚠️ Skipping {symbol} due to data fetch issue.")
             continue
 
-        try:
-            df = get_ohlcv_hourly(symbol)
-            time.sleep(0.75)  # Respect API rate limits
+        result = check_consolidation_and_breakout(df, threshold=range_threshold_percent, volume_threshold=volume_threshold)
+        if result:
+            in_cooldown = is_in_cooldown(symbol, cooldown_data)
+            print(f"{symbol}: Range={result['range_pct']:.2f}%, Breakout={result['breakout']}, Volume={result['volume']:.0f} {'(Cooldown active)' if in_cooldown else ''}")
+
+            if not in_cooldown:
+                signal_info = (symbol, result['breakout'], result['volume'], result['range_pct'])
+                signals_without_volume.append(signal_info)
+                if result['volume_ok']:
+                    signals_with_volume.append(signal_info)
+                update_cooldown(symbol, cooldown_data)
+            else:
+                print(f" - Alert suppressed due to cooldown.")
+
+        else:
+            # No breakout or range too wide
             if df is not None and len(df) >= 16:
                 recent = df.iloc[-16:-1]
                 high = recent['high'].max()
                 low = recent['low'].min()
                 range_pct = (high - low) / low * 100
+                print(f"{symbol}: No breakout. Range={range_pct:.2f}% > {range_threshold_percent}% or no breakout candle.")
 
-                result = check_consolidation_and_breakout(df, threshold=range_threshold_percent)
-                if result:
-                    print(f"🚀 {symbol}: {result} (Range: {range_pct:.2f}%)")
-                    breakouts.append((symbol, result))
-                    cooldown_tracker[symbol] = time.time()
-                else:
-                    print(f"❌ {symbol}: No breakout detected (Range: {range_pct:.2f}%)")
-            else:
-                print(f"⚠️ {symbol}: Not enough data")
-        except Exception as e:
-            print(f"⚠️ Error processing {symbol}: {e}")
+    save_cooldown(cooldown_data)
 
-    if breakouts:
-        send_email_alert(breakouts)
-        save_cooldown_tracker(cooldown_tracker)
+    # Send alerts if any
+    if signals_without_volume:
+        send_email_alert(signals_without_volume, sender_email, sender_password, receiver_email, "All Volume")
     else:
-        print("✅ No new breakouts.")
+        print("✅ No alerts triggered without volume filter.")
+
+    if signals_with_volume:
+        send_email_alert(signals_with_volume, sender_email, sender_password, receiver_email, "With Volume Filter")
+    else:
+        print("✅ No alerts triggered with volume filter.")
 
 if __name__ == "__main__":
     main_job()
