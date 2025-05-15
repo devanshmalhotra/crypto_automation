@@ -12,13 +12,29 @@ from email.mime.multipart import MIMEMultipart
 
 api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
 sender_email = "devanshmalhotra98@gmail.com"
-sender_password = "ragh uncj zykf uwik"
+sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
 receiver_email = "devanshmalhotra98@gmail.com"
 range_threshold_percent = 5.0
 cooldown_hours = 8
 cooldown_file = "cooldown_tracker.json"
 
-static_symbols = [ ... ]  # your full list goes here
+static_symbols =[
+    "ALCH", "ZEREBRO", "ALPACA", "RARE", "BIO", "WIF", "NKN", "VOXEL", "BAN", "SHELL",
+    "AI16Z", "GRIFFAIN", "MOODENG", "CHILLGUY", "HMSTR", "ZEN", "MUBARAK", "CETUS",
+    "GRASS", "SPX", "SOL", "ARC", "PNUT", "GAS", "PIXEL", "SUPER", "XRP", "STRK",
+    "ENJ", "BTCDOM", "LUMIA", "THETA", "ANKR", "BLUR", "MEW", "ATOM", "RONIN",
+    "MAGIC", "1000PEPE", "TRB", "PIPPIN", "ALPHA", "HIPPO", "DF", "KOMA", "EIGEN",
+    "FORTH", "GALA", "SAFE", "ARK", "DUSK", "VTHO", "AAVE", "MASK",
+    "TRUMP", "SUI", "DOGE", "LAYER", "FARTCOIN", "ADA", "VIRTUAL",
+    "1000BONK", "WLD", "TURBO", "BNB", "ENA", "AVAX", "ONDO", "LINK", "1000SHIB",
+    "FET", "TRX", "AIXBT", "LEVER", "CRV", "NEIRO", "TAO", "LTC", "ETHW", "BCH",
+    "FLM", "BSV", "POPCAT", "NEAR", "FIL", "DOT", "PENGU", "UNI", "EOS", "ORDI",
+    "S", "SYN", "OM", "APT", "XLM", "TIA", "HBAR", "OP", "INJ", "NEIROETH", "MELANIA",
+    "ORCA", "MYRO", "TON", "ARB", "KAITO", "BRETT", "BIGTIME", "1000FLOKI", "BSW",
+    "ETC", "HIFI", "1000SATS", "PEOPLE", "SAGA", "BOME", "GOAT", "RENDER", "PENDLE",
+    "ARPA", "ACT", "ARKM", "SWELL", "SEI", "CAKE",
+    "RAYSOL", "ALGO", "ZRO", "SWARMS", "VINE", "BANANA", "STX", "POL"
+]
 
 # ------------------ COOLDOWN UTILS ------------------
 
@@ -77,8 +93,8 @@ def get_ohlcv_hourly(symbol, quote='USDT', limit=16):
 # ------------------ STRATEGY LOGIC ------------------
 
 def check_consolidation_and_breakout(df, threshold=5.0):
-    recent = df.iloc[-16:-1]  # 15 candles before last closed
-    last_closed = df.iloc[-1]  # last *closed* candle
+    recent = df.iloc[-16:-1]  # 15 candles before last closed candle
+    last_closed = df.iloc[-1]  # last closed candle
     high = recent['high'].max()
     low = recent['low'].min()
     range_pct = (high - low) / low * 100
@@ -104,13 +120,22 @@ def main_job():
 
         try:
             df = get_ohlcv_hourly(symbol)
-            time.sleep(0.75)
+            time.sleep(0.75)  # Respect API rate limits
             if df is not None and len(df) >= 16:
-                result = check_consolidation_and_breakout(df)
+                recent = df.iloc[-16:-1]
+                high = recent['high'].max()
+                low = recent['low'].min()
+                range_pct = (high - low) / low * 100
+
+                result = check_consolidation_and_breakout(df, threshold=range_threshold_percent)
                 if result:
-                    print(f"🚀 {symbol}: {result}")
+                    print(f"🚀 {symbol}: {result} (Range: {range_pct:.2f}%)")
                     breakouts.append((symbol, result))
                     cooldown_tracker[symbol] = time.time()
+                else:
+                    print(f"❌ {symbol}: No breakout detected (Range: {range_pct:.2f}%)")
+            else:
+                print(f"⚠️ {symbol}: Not enough data")
         except Exception as e:
             print(f"⚠️ Error processing {symbol}: {e}")
 
