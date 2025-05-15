@@ -92,17 +92,18 @@ def get_ohlcv_hourly(symbol, quote='USDT', limit=16):
 
 # ------------------ STRATEGY LOGIC ------------------
 
-def check_consolidation_and_breakout(df, threshold=5.0):
-    recent = df.iloc[-16:-1]  # 15 candles before last closed candle
-    last_closed = df.iloc[-1]  # last closed candle
+def check_consolidation_and_breakout(df, threshold=10.0):
+    recent = df.iloc[-16:-1]  # 15 candles before last candle
     high = recent['high'].max()
     low = recent['low'].min()
     range_pct = (high - low) / low * 100
 
+    last_candle = df.iloc[-1]  # latest candle (could be still forming)
+
     if range_pct <= threshold:
-        if last_closed['close'] > high:
+        if last_candle['high'] > high:
             return "breakout_up"
-        elif last_closed['close'] < low:
+        elif last_candle['low'] < low:
             return "breakout_down"
     return None
 
