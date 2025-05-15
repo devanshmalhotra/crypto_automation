@@ -3,43 +3,49 @@ import time
 import datetime
 import pandas as pd
 import smtplib
+import json
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # ------------------ CONFIG ------------------
 
 api_key = "YOUR_CRYPTOCOMPARE_API_KEY"
-alert_threshold = 6  # % change
 sender_email = "devanshmalhotra98@gmail.com"
-sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+sender_password = "ragh uncj zykf uwik"
 receiver_email = "devanshmalhotra98@gmail.com"
+range_threshold_percent = 5.0
+cooldown_hours = 8
+cooldown_file = "cooldown_tracker.json"
 
-# Static list of coins
-static_symbols =["ALCH", "ZEREBRO", "ALPACA", "RARE", "BIO", "WIF", "NKN", "VOXEL", "BAN", "SHELL",
-    "AI16Z", "GRIFFAIN", "MOODENG", "CHILLGUY", "HMSTR", "ZEN", "MUBARAK", "CETUS",
-    "GRASS", "SPX", "SOL", "ARC", "PNUT", "GAS", "PIXEL", "SUPER", "XRP", "STRK",
-    "ENJ", "BTCDOM", "LUMIA", "THETA", "ANKR", "BLUR", "MEW", "ATOM", "RONIN",
-    "MAGIC", "1000PEPE", "TRB", "PIPPIN", "ALPHA", "HIPPO", "DF", "KOMA", "EIGEN",
-    "FORTH", "GALA", "SAFE", "ARK", "DUSK", "VTHO", "AAVE", "MASK",
-    # new added ones
-     "TRUMP", "SUI", "DOGE", "LAYER", "FARTCOIN", "ADA", "VIRTUAL",
-    "1000BONK", "WLD", "TURBO", "BNB", "ENA", "AVAX", "ONDO", "LINK", "1000SHIB",
-    "FET", "TRX", "AIXBT", "LEVER", "CRV", "NEIRO", "TAO", "LTC", "ETHW", "BCH",
-    "FLM", "BSV", "POPCAT", "NEAR", "FIL", "DOT", "PENGU", "UNI", "EOS", "ORDI",
-    "S", "SYN", "OM", "APT", "XLM", "TIA", "HBAR", "OP", "INJ", "NEIROETH", "MELANIA",
-    "ORCA", "MYRO", "TON", "ARB", "KAITO", "BRETT", "BIGTIME", "1000FLOKI", "BSW",
-    "ETC", "HIFI", "1000SATS", "PEOPLE", "SAGA", "BOME", "GOAT", "RENDER", "PENDLE",
-    "ARPA", "ACT", "ARKM", "SWELL", "SEI", "CAKE",
-    "RAYSOL", "ALGO", "ZRO", "SWARMS", "VINE", "BANANA", "STX", "POL"
-]
+static_symbols = [ ... ]  # your full list goes here
+
+# ------------------ COOLDOWN UTILS ------------------
+
+def load_cooldown_tracker():
+    if os.path.exists(cooldown_file):
+        with open(cooldown_file, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_cooldown_tracker(tracker):
+    with open(cooldown_file, 'w') as f:
+        json.dump(tracker, f)
+
+def is_in_cooldown(symbol, tracker):
+    now = time.time()
+    last_alert_time = tracker.get(symbol)
+    if last_alert_time and now - last_alert_time < cooldown_hours * 3600:
+        return True
+    return False
 
 # ------------------ EMAIL FUNCTION ------------------
 
-def send_email_alert(alerts, sender_email, sender_password, receiver_email):
-    subject = "🚨 Crypto Price Alert: 30-min Movers"
-    body = "The following crypto pairs moved more than 6% in the last 30 minutes:\n\n"
-    for symbol, change in alerts:
-        body += f"{symbol}: {change:.2f}%\n"
+def send_email_alert(breakouts):
+    subject = "🚨 Crypto Breakout Alert (15h consolidation)"
+    body = "These coins broke out of a 15-hour tight range (<5%) on the last closed hourly candle:\n\n"
+    for symbol, direction in breakouts:
+        body += f"{symbol}: {direction.upper()}\n"
 
     msg = MIMEMultipart()
     msg['From'] = sender_email
@@ -57,71 +63,62 @@ def send_email_alert(alerts, sender_email, sender_password, receiver_email):
     except Exception as e:
         print("⚠️ Failed to send email:", e)
 
-# ------------------ CRYPTO FUNCTIONS ------------------
+# ------------------ DATA FETCHING ------------------
 
-def get_price(api_key, symbol, quote='USDT'):
-    url = "https://min-api.cryptocompare.com/data/price"
-    params = {'fsym': symbol, 'tsyms': quote, 'api_key': api_key}
+def get_ohlcv_hourly(symbol, quote='USDT', limit=16):
+    url = "https://min-api.cryptocompare.com/data/v2/histohour"
+    params = {'fsym': symbol, 'tsym': quote, 'limit': limit, 'api_key': api_key}
     response = requests.get(url, params=params)
     data = response.json()
-    return data.get(quote)
-
-def get_historical_price(api_key, symbol, quote='USDT', minutes_back=30):
-    url = "https://min-api.cryptocompare.com/data/v2/histominute"
-    params = {'fsym': symbol, 'tsym': quote, 'limit': minutes_back, 'api_key': api_key}
-    response = requests.get(url, params=params)
-    data = response.json()
-
     if data.get("Response") != "Success":
         return None
+    return pd.DataFrame(data["Data"]["Data"])
 
-    prices = data["Data"]["Data"]
-    if prices:
-        return prices[0]['close']
+# ------------------ STRATEGY LOGIC ------------------
+
+def check_consolidation_and_breakout(df, threshold=5.0):
+    recent = df.iloc[-16:-1]  # 15 candles before last closed
+    last_closed = df.iloc[-1]  # last *closed* candle
+    high = recent['high'].max()
+    low = recent['low'].min()
+    range_pct = (high - low) / low * 100
+
+    if range_pct <= threshold:
+        if last_closed['close'] > high:
+            return "breakout_up"
+        elif last_closed['close'] < low:
+            return "breakout_down"
     return None
 
-def get_30min_movers(api_key, symbols, quote='USDT', alert_threshold=6):
-    movers = []
-    alerts = []
+# ------------------ MAIN JOB ------------------
 
-    for symbol in symbols:
+def main_job():
+    print(f"\n🕒 Running breakout check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    breakouts = []
+    cooldown_tracker = load_cooldown_tracker()
+
+    for symbol in static_symbols:
+        if is_in_cooldown(symbol, cooldown_tracker):
+            print(f"⏳ Skipping {symbol} (in cooldown)")
+            continue
+
         try:
-            price_now = get_price(api_key, symbol, quote)
-            time.sleep(1)  # To respect rate limits
-            price_30min_ago = get_historical_price(api_key, symbol, quote, minutes_back=30)
-            if not price_now or not price_30min_ago:
-                continue
-
-            change = ((price_now - price_30min_ago) / price_30min_ago) * 100
-            movers.append({'symbol': symbol, 'price_now': price_now, 'price_30min_ago': price_30min_ago, 'change (%)': change})
-
-            if abs(change) >= alert_threshold:
-                alerts.append((symbol, change))
+            df = get_ohlcv_hourly(symbol)
+            time.sleep(0.75)
+            if df is not None and len(df) >= 16:
+                result = check_consolidation_and_breakout(df)
+                if result:
+                    print(f"🚀 {symbol}: {result}")
+                    breakouts.append((symbol, result))
+                    cooldown_tracker[symbol] = time.time()
         except Exception as e:
             print(f"⚠️ Error processing {symbol}: {e}")
 
-    df = pd.DataFrame(movers).sort_values(by='change (%)', ascending=False)
-    return df, alerts
-
-# ------------------ MAIN ------------------
-
-def main_job():
-    print(f"\n🕒 Running check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    df, alerts = get_30min_movers(api_key, static_symbols, alert_threshold=alert_threshold)
-
-    if not df.empty:
-        print("\n🔝 Top Movers (30 min):")
-        print(df[['symbol', 'change (%)']].head(10))
+    if breakouts:
+        send_email_alert(breakouts)
+        save_cooldown_tracker(cooldown_tracker)
     else:
-        print("\n📭 No price data available.")
-
-    if alerts:
-        print("\n🚨 Alerts triggered:")
-        for symbol, change in alerts:
-            print(f"{symbol}: {change:.2f}%")
-        send_email_alert(alerts, sender_email, sender_password, receiver_email)
-    else:
-        print("\n✅ No alerts triggered.")
+        print("✅ No new breakouts.")
 
 if __name__ == "__main__":
     main_job()
