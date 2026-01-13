@@ -20,7 +20,28 @@ CANDLE_LIMIT = 120
 TOP_N = 100
 
 # =========================
-# EMAIL CONFIG (FROM SECRETS)
+# STATIC SYMBOLS (BASE SYMBOLS)
+# =========================
+static_symbols = [
+    "ALCH","ZEREBRO","ALPACA","RARE","BIO","WIF","NKN","VOXEL","BAN","SHELL",
+    "AI16Z","GRIFFAIN","MOODENG","CHILLGUY","HMSTR","ZEN","MUBARAK","CETUS",
+    "GRASS","SPX","SOL","ARC","PNUT","GAS","PIXEL","SUPER","XRP","STRK",
+    "ENJ","BTCDOM","LUMIA","THETA","ANKR","BLUR","MEW","ATOM","RONIN",
+    "MAGIC","1000PEPE","TRB","PIPPIN","ALPHA","HIPPO","DF","KOMA","EIGEN",
+    "FORTH","GALA","SAFE","ARK","DUSK","VTHO","AAVE","MASK",
+    "TRUMP","SUI","DOGE","LAYER","FARTCOIN","ADA","VIRTUAL",
+    "1000BONK","WLD","TURBO","BNB","ENA","AVAX","ONDO","LINK","1000SHIB",
+    "FET","TRX","AIXBT","LEVER","CRV","NEIRO","TAO","LTC","ETHW","BCH",
+    "FLM","BSV","POPCAT","NEAR","FIL","DOT","PENGU","UNI","EOS","ORDI",
+    "S","SYN","OM","APT","XLM","TIA","HBAR","OP","INJ","NEIROETH","MELANIA",
+    "ORCA","MYRO","TON","ARB","KAITO","BRETT","BIGTIME","1000FLOKI","BSW",
+    "ETC","HIFI","1000SATS","PEOPLE","SAGA","BOME","GOAT","RENDER","PENDLE",
+    "ARPA","ACT","ARKM","SWELL","SEI","CAKE",
+    "RAYSOL","ALGO","ZRO","SWARMS","VINE","BANANA","STX","POL"
+]
+
+# =========================
+# EMAIL CONFIG (SECRETS)
 # =========================
 EMAIL_HOST = os.getenv("EMAIL_HOST")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
@@ -29,7 +50,7 @@ EMAIL_PASS = os.getenv("EMAIL_PASS")
 EMAIL_TO = os.getenv("EMAIL_TO")
 
 # =========================
-# EMAIL FUNCTION
+# EMAIL
 # =========================
 def send_email(subject, body):
     if not all([EMAIL_HOST, EMAIL_USER, EMAIL_PASS, EMAIL_TO]):
@@ -39,7 +60,6 @@ def send_email(subject, body):
     msg["From"] = EMAIL_USER
     msg["To"] = EMAIL_TO
     msg["Subject"] = subject
-
     msg.attach(MIMEText(body, "plain"))
 
     with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
@@ -48,32 +68,27 @@ def send_email(subject, body):
         server.send_message(msg)
 
 # =========================
-# FETCH TOP 100 USDT-SWAP
+# DISCOVER VALID USDT-SWAPS
 # =========================
-def get_top_usdt_swap_symbols():
-    inst_resp = requests.get(
-        INSTRUMENTS_URL,
-        params={"instType": "SWAP"},
-        timeout=10
-    )
-    inst_resp.raise_for_status()
+def get_all_usdt_swaps():
+    r = requests.get(INSTRUMENTS_URL, params={"instType": "SWAP"}, timeout=10)
+    r.raise_for_status()
+    return {
+        i["instId"] for i in r.json()["data"]
+        if i["settleCcy"] == "USDT"
+    }
 
-    instruments = inst_resp.json()["data"]
-    usdt_swaps = {i["instId"] for i in instruments if i["settleCcy"] == "USDT"}
-
-    tick_resp = requests.get(
-        TICKER_URL,
-        params={"instType": "SWAP"},
-        timeout=10
-    )
-    tick_resp.raise_for_status()
-
-    tickers = tick_resp.json()["data"]
+# =========================
+# TOP 100 BY VOLUME
+# =========================
+def get_top_100_by_volume(valid_swaps):
+    r = requests.get(TICKER_URL, params={"instType": "SWAP"}, timeout=10)
+    r.raise_for_status()
 
     volume_map = {
         t["instId"]: float(t["volCcy24h"])
-        for t in tickers
-        if t["instId"] in usdt_swaps
+        for t in r.json()["data"]
+        if t["instId"] in valid_swaps
     }
 
     return [
@@ -83,6 +98,25 @@ def get_top_usdt_swap_symbols():
             reverse=True
         )[:TOP_N]
     ]
+
+# =========================
+# STATIC SYMBOL MAPPING
+# =========================
+def map_static_symbols(valid_swaps):
+    mapped = []
+    skipped = []
+
+    for sym in static_symbols:
+        inst = f"{sym}-USDT-SWAP"
+        if inst in valid_swaps:
+            mapped.append(inst)
+        else:
+            skipped.append(sym)
+
+    print(f"ℹ️ Static symbols mapped: {len(mapped)}")
+    print(f"⚠️ Static symbols skipped (not on OKX): {len(skipped)}")
+
+    return mapped
 
 # =========================
 # FETCH CANDLES
@@ -99,8 +133,8 @@ def fetch_ohlcv(inst_id):
     data.reverse()
 
     df = pd.DataFrame(data, columns=[
-        "ts", "open", "high", "low", "close",
-        "volume", "volCcy", "volCcyQuote", "confirm"
+        "ts","open","high","low","close",
+        "volume","volCcy","volCcyQuote","confirm"
     ])
 
     df[["open","high","low","close","volume"]] = df[
@@ -126,7 +160,7 @@ def detect_impulse(df):
 
     last = df.iloc[-1]
 
-    conditions = [
+    return all([
         last["close"] > last["open"],
         last["body"] >= 2.5 * last["avg_body"],
         last["body"] >= 0.65 * last["range"],
@@ -135,18 +169,20 @@ def detect_impulse(df):
         df["ema21"].iloc[-1] > df["ema21"].iloc[-2],
         last["range"] >= 1.8 * last["atr"],
         last["close"] > df["high"].iloc[-16:-1].max()
-    ]
-
-    return all(conditions)
+    ])
 
 # =========================
-# MAIN SCAN LOOP
+# MAIN
 # =========================
 def run_scan():
-    print("🔍 OKX 30m Impulse Scanner (Top 100 by Volume)\n")
+    print("🔍 OKX 30m Impulse Scanner (Top 100 + Static)\n")
 
-    symbols = get_top_usdt_swap_symbols()
-    print(f"✅ Loaded {len(symbols)} pairs\n")
+    valid_swaps = get_all_usdt_swaps()
+    top100 = get_top_100_by_volume(valid_swaps)
+    static_mapped = map_static_symbols(valid_swaps)
+
+    symbols = sorted(set(top100 + static_mapped))
+    print(f"✅ Total pairs scanned: {len(symbols)}\n")
 
     for symbol in symbols:
         try:
@@ -155,16 +191,9 @@ def run_scan():
 
             if impulse:
                 print(f"{symbol} → 🚀 IMPULSE FOUND")
-
                 send_email(
-                    subject=f"🚀 30m IMPULSE BULL detected on {symbol}",
-                    body=(
-                        f"Impulse Bull Candle detected\n\n"
-                        f"Symbol: {symbol}\n"
-                        f"Timeframe: 30m\n"
-                        f"Exchange: OKX\n\n"
-                        f"Check chart for pullback or continuation setup."
-                    )
+                    subject=f"🚀 30m IMPULSE BULL | {symbol}",
+                    body=f"Impulse candle detected on {symbol}\nTimeframe: 30m\nExchange: OKX"
                 )
             else:
                 print(f"{symbol} → ❌ no impulse")
@@ -175,7 +204,7 @@ def run_scan():
         sleep(0.25)
 
 # =========================
-# ENTRY POINT
+# ENTRY
 # =========================
 if __name__ == "__main__":
     run_scan()
