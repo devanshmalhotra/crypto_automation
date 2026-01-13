@@ -8,31 +8,68 @@ import os
 # =========================
 # CONFIG
 # =========================
-BASE_URL = "https://www.okx.com/api/v5/market/candles"
-INTERVAL = "30m"
-LIMIT = 120  # enough history for indicators + buffer
+CANDLE_URL = "https://www.okx.com/api/v5/market/candles"
+TICKER_URL = "https://www.okx.com/api/v5/market/tickers"
+INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
 
-SYMBOLS = [
-    "BTC-USDT-SWAP",
-    "ETH-USDT-SWAP",
-    # add more OKX USDT perpetual pairs if needed
-]
+INTERVAL = "30m"
+CANDLE_LIMIT = 120
+TOP_N = 100
 
 # =========================
-# DATA FETCH
+# FETCH TOP 100 USDT-SWAP BY VOLUME
+# =========================
+def get_top_usdt_swap_symbols():
+    # 1. Get all USDT-SWAP instruments
+    inst_params = {
+        "instType": "SWAP"
+    }
+    inst_resp = requests.get(INSTRUMENTS_URL, params=inst_params, timeout=10)
+    inst_resp.raise_for_status()
+
+    instruments = inst_resp.json()["data"]
+    usdt_swaps = [
+        i["instId"] for i in instruments if i["settleCcy"] == "USDT"
+    ]
+
+    # 2. Get tickers (24h volume)
+    tick_params = {
+        "instType": "SWAP"
+    }
+    tick_resp = requests.get(TICKER_URL, params=tick_params, timeout=10)
+    tick_resp.raise_for_status()
+
+    tickers = tick_resp.json()["data"]
+
+    volume_map = {}
+    for t in tickers:
+        if t["instId"] in usdt_swaps:
+            volume_map[t["instId"]] = float(t["volCcy24h"])
+
+    # 3. Sort by volume and take top N
+    top_symbols = sorted(
+        volume_map.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )[:TOP_N]
+
+    return [s[0] for s in top_symbols]
+
+# =========================
+# FETCH CANDLES
 # =========================
 def fetch_ohlcv(inst_id):
     params = {
         "instId": inst_id,
         "bar": INTERVAL,
-        "limit": LIMIT
+        "limit": CANDLE_LIMIT
     }
 
-    r = requests.get(BASE_URL, params=params, timeout=10)
+    r = requests.get(CANDLE_URL, params=params, timeout=10)
     r.raise_for_status()
 
     data = r.json()["data"]
-    data.reverse()  # oldest → newest
+    data.reverse()
 
     df = pd.DataFrame(data, columns=[
         "ts", "open", "high", "low", "close",
@@ -63,20 +100,20 @@ def detect_impulse(df):
     last = df.iloc[-1]
 
     conditions = [
-        last["close"] > last["open"],                            # bull candle
-        last["body"] >= 2.5 * last["avg_body"],                  # big body
-        last["body"] >= 0.65 * last["range"],                    # clean body
-        last["volume"] >= 1.8 * last["vol_sma"],                 # volume spike
-        last["close"] > last["ema9"] > last["ema21"],            # trend
-        df["ema21"].iloc[-1] > df["ema21"].iloc[-2],             # ema21 rising
-        last["range"] >= 1.8 * last["atr"],                      # volatility
-        last["close"] > df["high"].iloc[-16:-1].max()            # structure break
+        last["close"] > last["open"],
+        last["body"] >= 2.5 * last["avg_body"],
+        last["body"] >= 0.65 * last["range"],
+        last["volume"] >= 1.8 * last["vol_sma"],
+        last["close"] > last["ema9"] > last["ema21"],
+        df["ema21"].iloc[-1] > df["ema21"].iloc[-2],
+        last["range"] >= 1.8 * last["atr"],
+        last["close"] > df["high"].iloc[-16:-1].max()
     ]
 
     return all(conditions)
 
 # =========================
-# TELEGRAM ALERT (OPTIONAL)
+# TELEGRAM (OPTIONAL)
 # =========================
 def send_telegram(msg):
     token = os.getenv("TELEGRAM_TOKEN")
@@ -88,12 +125,14 @@ def send_telegram(msg):
     requests.post(url, data={"chat_id": chat_id, "text": msg})
 
 # =========================
-# MAIN SCAN LOOP
+# MAIN
 # =========================
 def run_scan():
-    print("🔍 OKX 30m Impulse Scanner running...\n")
+    print("🔍 Fetching top 100 USDT-SWAP pairs by volume...\n")
+    symbols = get_top_usdt_swap_symbols()
+    print(f"✅ Loaded {len(symbols)} pairs\n")
 
-    for symbol in SYMBOLS:
+    for symbol in symbols:
         try:
             df = fetch_ohlcv(symbol)
             impulse = detect_impulse(df)
@@ -107,7 +146,7 @@ def run_scan():
         except Exception as e:
             print(f"{symbol} → ⚠️ error: {e}")
 
-        sleep(0.3)  # polite rate limit
+        sleep(0.25)  # safe rate limit
 
 # =========================
 # ENTRY POINT
