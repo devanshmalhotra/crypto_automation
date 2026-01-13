@@ -22,11 +22,12 @@ TOP_N = 100
 # =========================
 # EMAIL CONFIG (FROM SECRETS)
 # =========================
-EMAIL_HOST = os.getenv("EMAIL_HOST")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
+EMAIL_HOST="smtp.gmail.com"
+EMAIL_PORT="587"
+EMAIL_USER="devanshmalhotra98@gmail.com"
+EMAIL_PASS="ragh uncj zykf uwik"
+EMAIL_TO="devanshmalhotra98@gmail.com"
+
 
 # =========================
 # EMAIL FUNCTION
