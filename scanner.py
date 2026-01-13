@@ -5,33 +5,32 @@ from ta.volatility import AverageTrueRange
 from time import sleep
 import os
 
-BASE_URL = "https://api.bybit.com/v5/market/kline"
-INTERVAL = "30"     # 30-minute candles
-LIMIT = 100
+BASE_URL = "https://www.okx.com/api/v5/market/candles"
+INTERVAL = "30m"
+LIMIT = 120  # extra buffer
 
 SYMBOLS = [
-    "BTCUSDT",
-    "ETHUSDT",
-    # add more USDT linear futures if needed
+    "BTC-USDT-SWAP",
+    "ETH-USDT-SWAP",
+    # add more OKX USDT-SWAP instruments
 ]
 
-def fetch_ohlcv(symbol):
+def fetch_ohlcv(inst_id):
     params = {
-        "category": "linear",
-        "symbol": symbol,
-        "interval": INTERVAL,
+        "instId": inst_id,
+        "bar": INTERVAL,
         "limit": LIMIT
     }
 
     r = requests.get(BASE_URL, params=params, timeout=10)
     r.raise_for_status()
-    data = r.json()["result"]["list"]
 
-    # Bybit returns newest first → reverse
-    data.reverse()
+    data = r.json()["data"]
+    data.reverse()  # oldest → newest
 
     df = pd.DataFrame(data, columns=[
-        "time","open","high","low","close","volume","turnover"
+        "ts","open","high","low","close",
+        "volume","volCcy","volCcyQuote","confirm"
     ])
 
     df[["open","high","low","close","volume"]] = df[
@@ -65,7 +64,7 @@ def detect_impulse(df):
         last["close"] > df["high"].iloc[-16:-1].max()
     ]
 
-    return all(conditions)
+    return all(conditions), df["ts"].iloc[-1]
 
 def send_telegram(msg):
     token = os.getenv("TELEGRAM_TOKEN")
@@ -76,17 +75,22 @@ def send_telegram(msg):
     requests.post(url, data={"chat_id": chat_id, "text": msg})
 
 def run_scan():
-    print("🔍 Scanning 30m impulse candles (Bybit)...\n")
+    print("🔍 OKX 30m Impulse Scanner running...\n")
+
     for symbol in SYMBOLS:
         try:
             df = fetch_ohlcv(symbol)
-            if detect_impulse(df):
-                message = f"🚀 30m IMPULSE BULL on {symbol} (Bybit)"
-                print(message)
-                send_telegram(message)
+            is_impulse, candle_ts = detect_impulse(df)
+
+            if is_impulse:
+                msg = f"🚀 30m IMPULSE BULL | {symbol}"
+                print(msg)
+                send_telegram(msg)
+
         except Exception as e:
             print(f"⚠️ {symbol}: {e}")
-        sleep(0.2)
+
+        sleep(0.3)  # polite rate limiting
 
 if __name__ == "__main__":
     run_scan()
