@@ -1,0 +1,29 @@
+name: 30m Crypto Futures Impulse Scanner
+
+on:
+  schedule:
+    # Runs every 30 minutes (UTC)
+    - cron: "*/30 * * * *"
+  workflow_dispatch:  # allows manual run
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run impulse scanner
+        run: |
+          python scanner.py
