@@ -4,6 +4,9 @@ from ta.trend import EMAIndicator
 from ta.volatility import AverageTrueRange
 from time import sleep
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # =========================
 # CONFIG
@@ -17,55 +20,79 @@ CANDLE_LIMIT = 120
 TOP_N = 100
 
 # =========================
-# FETCH TOP 100 USDT-SWAP BY VOLUME
+# EMAIL CONFIG (FROM SECRETS)
+# =========================
+EMAIL_HOST = os.getenv("EMAIL_HOST")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_USER = os.getenv("EMAIL_USER")
+EMAIL_PASS = os.getenv("EMAIL_PASS")
+EMAIL_TO = os.getenv("EMAIL_TO")
+
+# =========================
+# EMAIL FUNCTION
+# =========================
+def send_email(subject, body):
+    if not all([EMAIL_HOST, EMAIL_USER, EMAIL_PASS, EMAIL_TO]):
+        return
+
+    msg = MIMEMultipart()
+    msg["From"] = EMAIL_USER
+    msg["To"] = EMAIL_TO
+    msg["Subject"] = subject
+
+    msg.attach(MIMEText(body, "plain"))
+
+    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+        server.starttls()
+        server.login(EMAIL_USER, EMAIL_PASS)
+        server.send_message(msg)
+
+# =========================
+# FETCH TOP 100 USDT-SWAP
 # =========================
 def get_top_usdt_swap_symbols():
-    # 1. Get all USDT-SWAP instruments
-    inst_params = {
-        "instType": "SWAP"
-    }
-    inst_resp = requests.get(INSTRUMENTS_URL, params=inst_params, timeout=10)
+    inst_resp = requests.get(
+        INSTRUMENTS_URL,
+        params={"instType": "SWAP"},
+        timeout=10
+    )
     inst_resp.raise_for_status()
 
     instruments = inst_resp.json()["data"]
-    usdt_swaps = [
-        i["instId"] for i in instruments if i["settleCcy"] == "USDT"
-    ]
+    usdt_swaps = {i["instId"] for i in instruments if i["settleCcy"] == "USDT"}
 
-    # 2. Get tickers (24h volume)
-    tick_params = {
-        "instType": "SWAP"
-    }
-    tick_resp = requests.get(TICKER_URL, params=tick_params, timeout=10)
+    tick_resp = requests.get(
+        TICKER_URL,
+        params={"instType": "SWAP"},
+        timeout=10
+    )
     tick_resp.raise_for_status()
 
     tickers = tick_resp.json()["data"]
 
-    volume_map = {}
-    for t in tickers:
-        if t["instId"] in usdt_swaps:
-            volume_map[t["instId"]] = float(t["volCcy24h"])
+    volume_map = {
+        t["instId"]: float(t["volCcy24h"])
+        for t in tickers
+        if t["instId"] in usdt_swaps
+    }
 
-    # 3. Sort by volume and take top N
-    top_symbols = sorted(
-        volume_map.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )[:TOP_N]
-
-    return [s[0] for s in top_symbols]
+    return [
+        s[0] for s in sorted(
+            volume_map.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:TOP_N]
+    ]
 
 # =========================
 # FETCH CANDLES
 # =========================
 def fetch_ohlcv(inst_id):
-    params = {
-        "instId": inst_id,
-        "bar": INTERVAL,
-        "limit": CANDLE_LIMIT
-    }
-
-    r = requests.get(CANDLE_URL, params=params, timeout=10)
+    r = requests.get(
+        CANDLE_URL,
+        params={"instId": inst_id, "bar": INTERVAL, "limit": CANDLE_LIMIT},
+        timeout=10
+    )
     r.raise_for_status()
 
     data = r.json()["data"]
@@ -76,8 +103,8 @@ def fetch_ohlcv(inst_id):
         "volume", "volCcy", "volCcyQuote", "confirm"
     ])
 
-    df[["open", "high", "low", "close", "volume"]] = df[
-        ["open", "high", "low", "close", "volume"]
+    df[["open","high","low","close","volume"]] = df[
+        ["open","high","low","close","volume"]
     ].astype(float)
 
     return df
@@ -113,22 +140,11 @@ def detect_impulse(df):
     return all(conditions)
 
 # =========================
-# TELEGRAM (OPTIONAL)
-# =========================
-def send_telegram(msg):
-    token = os.getenv("TELEGRAM_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    requests.post(url, data={"chat_id": chat_id, "text": msg})
-
-# =========================
-# MAIN
+# MAIN SCAN LOOP
 # =========================
 def run_scan():
-    print("🔍 Fetching top 100 USDT-SWAP pairs by volume...\n")
+    print("🔍 OKX 30m Impulse Scanner (Top 100 by Volume)\n")
+
     symbols = get_top_usdt_swap_symbols()
     print(f"✅ Loaded {len(symbols)} pairs\n")
 
@@ -139,14 +155,24 @@ def run_scan():
 
             if impulse:
                 print(f"{symbol} → 🚀 IMPULSE FOUND")
-                send_telegram(f"🚀 30m IMPULSE BULL | {symbol}")
+
+                send_email(
+                    subject=f"🚀 30m IMPULSE BULL detected on {symbol}",
+                    body=(
+                        f"Impulse Bull Candle detected\n\n"
+                        f"Symbol: {symbol}\n"
+                        f"Timeframe: 30m\n"
+                        f"Exchange: OKX\n\n"
+                        f"Check chart for pullback or continuation setup."
+                    )
+                )
             else:
                 print(f"{symbol} → ❌ no impulse")
 
         except Exception as e:
             print(f"{symbol} → ⚠️ error: {e}")
 
-        sleep(0.25)  # safe rate limit
+        sleep(0.25)
 
 # =========================
 # ENTRY POINT
