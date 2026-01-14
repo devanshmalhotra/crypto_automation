@@ -7,7 +7,7 @@ SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
 SENDER_EMAIL = "devanshmalhotra98@gmail.com"
-SENDER_PASSWORD = "rgcsqglobazxvgt"  # Use app password if Gmail 2FA is on
+SENDER_PASSWORD = "cigl vjac hfxl wrwv"  # Use app password if Gmail 2FA is on
 RECEIVER_EMAIL = "devanshmalhotra98@gmail.com"
 
 # Create the email
