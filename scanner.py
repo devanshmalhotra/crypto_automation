@@ -1,6 +1,4 @@
 import requests
-import pandas as pd
-from ta.volatility import AverageTrueRange
 from time import sleep
 import os
 import smtplib
@@ -15,11 +13,30 @@ TICKER_URL = "https://www.okx.com/api/v5/market/tickers"
 INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
 
 INTERVAL = "30m"
-CANDLE_LIMIT = 120
+CANDLE_LIMIT = 5
 TOP_N = 100
+PCT_THRESHOLD = 0.10  # 10%
 
-BODY_MULTIPLIER = 2.0   # <-- changed from 2.5 → 2.0
-USE_ATR_FILTER = True  # set False if you want body-only
+# =========================
+# STATIC SYMBOLS (BASE)
+# =========================
+static_symbols = [
+    "ALCH","ZEREBRO","ALPACA","RARE","BIO","WIF","NKN","VOXEL","BAN","SHELL",
+    "AI16Z","GRIFFAIN","MOODENG","CHILLGUY","HMSTR","ZEN","MUBARAK","CETUS",
+    "GRASS","SPX","SOL","ARC","PNUT","GAS","PIXEL","SUPER","XRP","STRK",
+    "ENJ","BTCDOM","LUMIA","THETA","ANKR","BLUR","MEW","ATOM","RONIN",
+    "MAGIC","1000PEPE","TRB","PIPPIN","ALPHA","HIPPO","DF","KOMA","EIGEN",
+    "FORTH","GALA","SAFE","ARK","DUSK","VTHO","AAVE","MASK",
+    "TRUMP","SUI","DOGE","LAYER","FARTCOIN","ADA","VIRTUAL",
+    "1000BONK","WLD","TURBO","BNB","ENA","AVAX","ONDO","LINK","1000SHIB",
+    "FET","TRX","AIXBT","LEVER","CRV","NEIRO","TAO","LTC","ETHW","BCH",
+    "FLM","BSV","POPCAT","NEAR","FIL","DOT","PENGU","UNI","EOS","ORDI",
+    "S","SYN","OM","APT","XLM","TIA","HBAR","OP","INJ","NEIROETH","MELANIA",
+    "ORCA","MYRO","TON","ARB","KAITO","BRETT","BIGTIME","1000FLOKI","BSW",
+    "ETC","HIFI","1000SATS","PEOPLE","SAGA","BOME","GOAT","RENDER","PENDLE",
+    "ARPA","ACT","ARKM","SWELL","SEI","CAKE",
+    "RAYSOL","ALGO","ZRO","SWARMS","VINE","BANANA","STX","POL"
+]
 
 # =========================
 # EMAIL CONFIG (SECRETS)
@@ -49,18 +66,30 @@ def send_email(subject, body):
         server.send_message(msg)
 
 # =========================
-# SYMBOL DISCOVERY
+# DISCOVER VALID USDT-SWAPS
 # =========================
 def get_all_usdt_swaps():
-    r = requests.get(INSTRUMENTS_URL, params={"instType": "SWAP"}, timeout=10)
+    r = requests.get(
+        INSTRUMENTS_URL,
+        params={"instType": "SWAP"},
+        timeout=10
+    )
     r.raise_for_status()
+
     return {
         i["instId"] for i in r.json()["data"]
         if i["settleCcy"] == "USDT"
     }
 
+# =========================
+# TOP 100 BY VOLUME
+# =========================
 def get_top_100_by_volume(valid_swaps):
-    r = requests.get(TICKER_URL, params={"instType": "SWAP"}, timeout=10)
+    r = requests.get(
+        TICKER_URL,
+        params={"instType": "SWAP"},
+        timeout=10
+    )
     r.raise_for_status()
 
     volume_map = {
@@ -78,9 +107,26 @@ def get_top_100_by_volume(valid_swaps):
     ]
 
 # =========================
-# FETCH CANDLES
+# MAP STATIC SYMBOLS
 # =========================
-def fetch_ohlcv(inst_id):
+def map_static_symbols(valid_swaps):
+    mapped = []
+    skipped = []
+
+    for sym in static_symbols:
+        inst = f"{sym}-USDT-SWAP"
+        if inst in valid_swaps:
+            mapped.append(inst)
+        else:
+            skipped.append(sym)
+
+    print(f"ℹ️ Static mapped: {len(mapped)} | skipped: {len(skipped)}")
+    return mapped
+
+# =========================
+# FETCH LAST 30m CANDLE
+# =========================
+def fetch_last_candle(inst_id):
     r = requests.get(
         CANDLE_URL,
         params={"instId": inst_id, "bar": INTERVAL, "limit": CANDLE_LIMIT},
@@ -88,83 +134,56 @@ def fetch_ohlcv(inst_id):
     )
     r.raise_for_status()
 
-    data = r.json()["data"]
-    data.reverse()
+    last = r.json()["data"][0]  # newest candle
 
-    df = pd.DataFrame(data, columns=[
-        "ts","open","high","low","close",
-        "volume","volCcy","volCcyQuote","confirm"
-    ])
-
-    df[["open","high","low","close"]] = df[
-        ["open","high","low","close"]
-    ].astype(float)
-
-    return df
-
-# =========================
-# BIG CANDLE LOGIC (ONLY)
-# =========================
-def detect_big_candle(df):
-    df["body"] = abs(df["close"] - df["open"])
-    df["avg_body"] = df["body"].rolling(20).mean()
-    df["range"] = df["high"] - df["low"]
-
-    last = df.iloc[-1]
-
-    big_body = last["body"] >= BODY_MULTIPLIER * last["avg_body"]
-
-    if not USE_ATR_FILTER:
-        return big_body, last
-
-    atr = AverageTrueRange(
-        df["high"], df["low"], df["close"], 14
-    ).average_true_range()
-
-    big_range = last["range"] >= 2.0 * atr.iloc[-1]
-
-    return big_body and big_range, last
+    return {
+        "open": float(last[1]),
+        "close": float(last[4]),
+        "ts": last[0]
+    }
 
 # =========================
 # MAIN
 # =========================
 def run_scan():
-    print("🔍 OKX 30m BIG CANDLE SCANNER\n")
+    print("🔍 OKX 30m PRICE SHOCK SCANNER (±10%)\n")
 
     valid_swaps = get_all_usdt_swaps()
-    symbols = get_top_100_by_volume(valid_swaps)
+    top100 = get_top_100_by_volume(valid_swaps)
+    static_mapped = map_static_symbols(valid_swaps)
 
-    print(f"✅ Scanning {len(symbols)} pairs\n")
+    symbols = sorted(set(top100 + static_mapped))
+    print(f"✅ Total pairs scanned: {len(symbols)}\n")
 
     for symbol in symbols:
         try:
-            df = fetch_ohlcv(symbol)
-            detected, last = detect_big_candle(df)
+            candle = fetch_last_candle(symbol)
+            pct_change = (candle["close"] - candle["open"]) / candle["open"]
 
-            if detected:
-                direction = "BULL" if last["close"] > last["open"] else "BEAR"
-                body_ratio = round(last["body"] / last["avg_body"], 2)
+            if abs(pct_change) >= PCT_THRESHOLD:
+                direction = "PUMP" if pct_change > 0 else "DUMP"
+                pct = round(pct_change * 100, 2)
 
-                print(f"{symbol} → 🚨 BIG {direction} CANDLE ({body_ratio}×)")
+                print(f"{symbol} → 🚨 {direction} {pct}%")
 
                 send_email(
-                    subject=f"🚨 BIG {direction} 30m CANDLE | {symbol}",
+                    subject=f"🚨 {direction} ALERT | {symbol} | {pct}%",
                     body=(
-                        f"Big 30m candle detected\n\n"
+                        f"30m price shock detected\n\n"
                         f"Symbol    : {symbol}\n"
                         f"Direction : {direction}\n"
-                        f"Body Size : {body_ratio} × avg(20)\n"
+                        f"Change    : {pct}%\n"
                         f"Timeframe : 30m\n"
                         f"Exchange  : OKX"
                     )
                 )
             else:
-                print(f"{symbol} → ❌ no big candle")
+                print(f"{symbol} → ❌ no major move")
 
         except Exception as e:
             print(f"{symbol} → ⚠️ error: {e}")
 
-        sleep(0.25)
+        sleep(0.2)
 
 # =========================
 # ENTRY
