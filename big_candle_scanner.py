@@ -25,7 +25,7 @@ USE_ATR_FILTER = True
 # EMAIL CONFIG (ENV VARS)
 # =========================
 sender_email = "devanshmalhotra98@gmail.com"
-sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+sender_password = "raghuncjzykfuwik"  # Use app password if Gmail 2FA is on
 receiver_email = "devanshmalhotra98@gmail.com"
 
 # =========================
