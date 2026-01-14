@@ -24,9 +24,9 @@ USE_ATR_FILTER = True
 # =========================
 # EMAIL CONFIG (ENV VARS)
 # =========================
-sender_email = os.getenv("EMAIL_USER")
-sender_password = os.getenv("EMAIL_PASS")
-receiver_email = os.getenv("EMAIL_TO")
+sender_email = "devanshmalhotra98@gmail.com"
+sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+receiver_email = "devanshmalhotra98@gmail.com"
 
 # =========================
 # EMAIL (AGGREGATED)
