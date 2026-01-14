@@ -1,13 +1,13 @@
 import requests
-from time import sleep
-import os
+import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import os
 
-# =========================
+# =======================
 # CONFIG
-# =========================
+# =======================
 CANDLE_URL = "https://www.okx.com/api/v5/market/candles"
 TICKER_URL = "https://www.okx.com/api/v5/market/tickers"
 INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
@@ -15,11 +15,18 @@ INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
 INTERVAL = "30m"
 CANDLE_LIMIT = 5
 TOP_N = 100
-PCT_THRESHOLD = 0.10  # 10%
+ALERT_THRESHOLD = 10.0  # percent
 
-# =========================
+# =======================
+# EMAIL CONFIG (ENV VARS)
+# =======================
+sender_email = os.getenv("EMAIL_USER")
+sender_password = os.getenv("EMAIL_PASS")
+receiver_email = os.getenv("EMAIL_TO")
+
+# =======================
 # STATIC SYMBOLS (BASE)
-# =========================
+# =======================
 static_symbols = [
     "ALCH","ZEREBRO","ALPACA","RARE","BIO","WIF","NKN","VOXEL","BAN","SHELL",
     "AI16Z","GRIFFAIN","MOODENG","CHILLGUY","HMSTR","ZEN","MUBARAK","CETUS",
@@ -38,58 +45,45 @@ static_symbols = [
     "RAYSOL","ALGO","ZRO","SWARMS","VINE","BANANA","STX","POL"
 ]
 
-# =========================
-# EMAIL CONFIG (SECRETS)
-# =========================
-EMAIL_HOST = os.getenv("EMAIL_HOST")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
-EMAIL_USER = os.getenv("EMAIL_USER")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
+# =======================
+# EMAIL FUNCTION (SAME STYLE)
+# =======================
+def send_email_alert(alerts):
+    subject = "🚨 Crypto Price Alert: 30-min Movers"
+    body = "The following crypto pairs moved more than 10% in the last 30 minutes:\n\n"
 
-# =========================
-# EMAIL
-# =========================
-def send_email(subject, body):
-    if not all([EMAIL_HOST, EMAIL_USER, EMAIL_PASS, EMAIL_TO]):
-        return
+    for symbol, change in alerts:
+        body += f"{symbol}: {change:.2f}%\n"
 
     msg = MIMEMultipart()
-    msg["From"] = EMAIL_USER
-    msg["To"] = EMAIL_TO
+    msg["From"] = sender_email
+    msg["To"] = receiver_email
     msg["Subject"] = subject
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+    try:
+        server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
-        server.login(EMAIL_USER, EMAIL_PASS)
-        server.send_message(msg)
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, receiver_email, msg.as_string())
+        server.quit()
+        print("📧 Email alert sent!")
+    except Exception as e:
+        print("⚠️ Failed to send email:", e)
 
-# =========================
-# DISCOVER VALID USDT-SWAPS
-# =========================
+# =======================
+# OKX HELPERS
+# =======================
 def get_all_usdt_swaps():
-    r = requests.get(
-        INSTRUMENTS_URL,
-        params={"instType": "SWAP"},
-        timeout=10
-    )
+    r = requests.get(INSTRUMENTS_URL, params={"instType": "SWAP"}, timeout=10)
     r.raise_for_status()
-
     return {
         i["instId"] for i in r.json()["data"]
         if i["settleCcy"] == "USDT"
     }
 
-# =========================
-# TOP 100 BY VOLUME
-# =========================
 def get_top_100_by_volume(valid_swaps):
-    r = requests.get(
-        TICKER_URL,
-        params={"instType": "SWAP"},
-        timeout=10
-    )
+    r = requests.get(TICKER_URL, params={"instType": "SWAP"}, timeout=10)
     r.raise_for_status()
 
     volume_map = {
@@ -106,87 +100,66 @@ def get_top_100_by_volume(valid_swaps):
         )[:TOP_N]
     ]
 
-# =========================
-# MAP STATIC SYMBOLS
-# =========================
 def map_static_symbols(valid_swaps):
     mapped = []
-    skipped = []
-
     for sym in static_symbols:
         inst = f"{sym}-USDT-SWAP"
         if inst in valid_swaps:
             mapped.append(inst)
-        else:
-            skipped.append(sym)
-
-    print(f"ℹ️ Static mapped: {len(mapped)} | skipped: {len(skipped)}")
     return mapped
 
-# =========================
-# FETCH LAST 30m CANDLE
-# =========================
-def fetch_last_candle(inst_id):
+def fetch_last_30m_candle(inst_id):
     r = requests.get(
         CANDLE_URL,
         params={"instId": inst_id, "bar": INTERVAL, "limit": CANDLE_LIMIT},
         timeout=10
     )
     r.raise_for_status()
-
     last = r.json()["data"][0]  # newest candle
+    return float(last[1]), float(last[4])
 
-    return {
-        "open": float(last[1]),
-        "close": float(last[4]),
-        "ts": last[0]
-    }
-
-# =========================
-# MAIN
-# =========================
-def run_scan():
-    print("🔍 OKX 30m PRICE SHOCK SCANNER (±10%)\n")
+# =======================
+# MAIN JOB (LIKE YOUR SCRIPT)
+# =======================
+def main_job():
+    print("\n🕒 Running 30m OKX price shock scan...\n")
 
     valid_swaps = get_all_usdt_swaps()
-    top100 = get_top_100_by_volume(valid_swaps)
-    static_mapped = map_static_symbols(valid_swaps)
+    symbols = sorted(
+        set(
+            get_top_100_by_volume(valid_swaps)
+            + map_static_symbols(valid_swaps)
+        )
+    )
 
-    symbols = sorted(set(top100 + static_mapped))
-    print(f"✅ Total pairs scanned: {len(symbols)}\n")
+    alerts = []
 
     for symbol in symbols:
         try:
-            candle = fetch_last_candle(symbol)
-            pct_change = (candle["close"] - candle["open"]) / candle["open"]
+            open_price, close_price = fetch_last_30m_candle(symbol)
+            change = ((close_price - open_price) / open_price) * 100
 
-            if abs(pct_change) >= PCT_THRESHOLD:
-                direction = "PUMP" if pct_change > 0 else "DUMP"
-                pct = round(pct_change * 100, 2)
-
-                print(f"{symbol} → 🚨 {direction} {pct}%")
-
-                send_email(
-                    subject=f"🚨 {direction} ALERT | {symbol} | {pct}%",
-                    body=(
-                        f"30m price shock detected\n\n"
-                        f"Symbol    : {symbol}\n"
-                        f"Direction : {direction}\n"
-                        f"Change    : {pct}%\n"
-                        f"Timeframe : 30m\n"
-                        f"Exchange  : OKX"
-                    )
-                )
+            if abs(change) >= ALERT_THRESHOLD:
+                print(f"🚨 {symbol}: {change:.2f}%")
+                alerts.append((symbol, change))
             else:
-                print(f"{symbol} → ❌ no major move")
+                print(f"{symbol}: no major move")
 
         except Exception as e:
-            print(f"{symbol} → ⚠️ error: {e}")
+            print(f"⚠️ Error processing {symbol}: {e}")
 
-        sleep(0.2)
+        time.sleep(0.2)
 
-# =========================
+    if alerts:
+        print("\n🚨 Alerts triggered:")
+        for symbol, change in alerts:
+            print(f"{symbol}: {change:.2f}%")
+        send_email_alert(alerts)
+    else:
+        print("\n✅ No alerts triggered.")
+
+# =======================
 # ENTRY
-# =========================
+# =======================
 if __name__ == "__main__":
-    run_scan()
+    main_job()
