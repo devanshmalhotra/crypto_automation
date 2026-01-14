@@ -20,15 +20,16 @@ ALERT_THRESHOLD = 10.0  # percent
 # =======================
 # EMAIL CONFIG (ENV VARS)
 # =======================
-sender_email = os.getenv("EMAIL_USER")
-sender_password = os.getenv("EMAIL_PASS")
-receiver_email = os.getenv("EMAIL_TO")
+
+sender_email = "devanshmalhotra98@gmail.com"
+sender_password = "ragh uncj zykf uwik"  # Use app password if Gmail 2FA is on
+receiver_email = "devanshmalhotra98@gmail.com"
 
 # =======================
 # STATIC SYMBOLS (BASE)
 # =======================
 static_symbols = [
-    "ALCH","ZEREBRO","ALPACA","RARE","BIO","WIF","NKN","VOXEL","BAN","SHELL",
+    "ALCH","ZEREBRO","ALPACA", "RARE","BIO","WIF","NKN","VOXEL","BAN","SHELL",
     "AI16Z","GRIFFAIN","MOODENG","CHILLGUY","HMSTR","ZEN","MUBARAK","CETUS",
     "GRASS","SPX","SOL","ARC","PNUT","GAS","PIXEL","SUPER","XRP","STRK",
     "ENJ","BTCDOM","LUMIA","THETA","ANKR","BLUR","MEW","ATOM","RONIN",
@@ -40,8 +41,8 @@ static_symbols = [
     "FLM","BSV","POPCAT","NEAR","FIL","DOT","PENGU","UNI","EOS","ORDI",
     "S","SYN","OM","APT","XLM","TIA","HBAR","OP","INJ","NEIROETH","MELANIA",
     "ORCA","MYRO","TON","ARB","KAITO","BRETT","BIGTIME","1000FLOKI","BSW",
-    "ETC","HIFI","1000SATS","PEOPLE","SAGA","BOME","GOAT","RENDER","PENDLE",
-    "ARPA","ACT","ARKM","SWELL","SEI","CAKE",
+    "ETC","HIFI","1000SATS", "PEOPLE","SAGA","BOME","GOAT","RENDER","PENDLE",
+    "ARPA","ACT","ARKM", "SWELL","SEI","CAKE",
     "RAYSOL","ALGO","ZRO","SWARMS","VINE","BANANA","STX","POL"
 ]
 
