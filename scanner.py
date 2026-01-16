@@ -3,6 +3,7 @@ import time
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from datetime import datetime
 
 # =======================
 # CONFIG
@@ -12,10 +13,10 @@ TICKER_URL = "https://www.okx.com/api/v5/market/tickers"
 INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
 
 INTERVAL = "30m"
-TOP_N = 100
+TOP_N = 300
 
-IMPULSE_THRESHOLD = 10.0      # single candle %
-TREND_THRESHOLD = 10.0        # 3-candle cumulative %
+IMPULSE_THRESHOLD = 10.0   # single candle %
+TREND_THRESHOLD = 10.0     # 3-candle cumulative %
 
 REQUEST_TIMEOUT = 10
 SLEEP_BETWEEN_CALLS = 0.2
@@ -51,7 +52,7 @@ static_symbols = [
 # =======================
 # EMAIL FUNCTION
 # =======================
-def send_email_alert(impulses, trends):
+def send_email_alert(impulses, trends, summary):
     subject = "🚨 Crypto 30m Momentum Alerts"
     body = ""
 
@@ -65,6 +66,10 @@ def send_email_alert(impulses, trends):
         body += "📈 TREND EXPANSIONS (3 × 30m ≥ 10%)\n"
         for sym, chg in trends:
             body += f"{sym}: {chg:.2f}%\n"
+        body += "\n"
+
+    body += "📊 SUMMARY\n"
+    body += summary
 
     msg = MIMEMultipart()
     msg["From"] = sender_email
@@ -86,11 +91,7 @@ def send_email_alert(impulses, trends):
 # OKX HELPERS
 # =======================
 def get_all_usdt_swaps():
-    r = requests.get(
-        INSTRUMENTS_URL,
-        params={"instType": "SWAP"},
-        timeout=REQUEST_TIMEOUT
-    )
+    r = requests.get(INSTRUMENTS_URL, params={"instType": "SWAP"}, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return {
         i["instId"]
@@ -98,17 +99,10 @@ def get_all_usdt_swaps():
         if i["settleCcy"] == "USDT"
     }
 
-def get_top_100_by_volume(valid_swaps):
-    r = requests.get(
-        TICKER_URL,
-        params={"instType": "SWAP"},
-        timeout=REQUEST_TIMEOUT
-    )
+def get_top_by_volume(valid_swaps):
+    r = requests.get(TICKER_URL, params={"instType": "SWAP"}, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
-
     data = r.json()
-    if data.get("code") != "0":
-        raise RuntimeError(data)
 
     volume_map = {
         t["instId"]: float(t["volCcy24h"])
@@ -117,11 +111,7 @@ def get_top_100_by_volume(valid_swaps):
     }
 
     return [
-        s[0] for s in sorted(
-            volume_map.items(),
-            key=lambda x: x[1],
-            reverse=True
-        )[:TOP_N]
+        s[0] for s in sorted(volume_map.items(), key=lambda x: x[1], reverse=True)[:TOP_N]
     ]
 
 def map_static_symbols(valid_swaps):
@@ -139,12 +129,8 @@ def fetch_last_3_candle_changes(inst_id):
     )
     r.raise_for_status()
 
-    data = r.json()
-    if data.get("code") != "0":
-        raise RuntimeError(data)
-
-    candles = data["data"]
-    candles.reverse()  # oldest → newest
+    candles = r.json()["data"]
+    candles.reverse()
 
     changes = []
     for c in candles:
@@ -158,39 +144,32 @@ def fetch_last_3_candle_changes(inst_id):
 # MAIN JOB
 # =======================
 def main_job():
-    print("\n🕒 Running two-mode 30m OKX scan...\n")
+    start_time = datetime.utcnow()
+    print("\n🕒 Starting two-mode 30m OKX scan\n")
 
     valid_swaps = get_all_usdt_swaps()
-    symbols = sorted(set(
-        get_top_100_by_volume(valid_swaps) +
-        map_static_symbols(valid_swaps)
-    ))
+    symbols = sorted(set(get_top_by_volume(valid_swaps) + map_static_symbols(valid_swaps)))
 
     impulse_alerts = []
     trend_alerts = []
 
+    processed = 0
+    errors = 0
+
     for symbol in symbols:
+        processed += 1
         try:
             c1, c2, c3 = fetch_last_3_candle_changes(symbol)
 
             total_move = c1 + c2 + c3
-            same_dir = (
-                (c1 > 0 and c2 > 0 and c3 > 0) or
-                (c1 < 0 and c2 < 0 and c3 < 0)
-            )
+            same_dir = (c1 > 0 and c2 > 0 and c3 > 0) or (c1 < 0 and c2 < 0 and c3 < 0)
             max_single = max(abs(c1), abs(c2), abs(c3))
 
-            # MODE 1 — IMPULSE
             if abs(c3) >= IMPULSE_THRESHOLD:
                 print(f"🚨 IMPULSE {symbol}: {c3:.2f}%")
                 impulse_alerts.append((symbol, c3))
 
-            # MODE 2 — TREND
-            elif (
-                abs(total_move) >= TREND_THRESHOLD and
-                same_dir and
-                max_single < IMPULSE_THRESHOLD
-            ):
+            elif abs(total_move) >= TREND_THRESHOLD and same_dir and max_single < IMPULSE_THRESHOLD:
                 print(f"📈 TREND {symbol}: {total_move:.2f}%")
                 trend_alerts.append((symbol, total_move))
 
@@ -198,14 +177,29 @@ def main_job():
                 print(f"{symbol}: no signal")
 
         except Exception as e:
+            errors += 1
             print(f"⚠️ {symbol} error: {e}")
 
         time.sleep(SLEEP_BETWEEN_CALLS)
 
+    duration = (datetime.utcnow() - start_time).seconds
+
+    summary = (
+        f"Scan Time (UTC): {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"Symbols Scanned: {processed}\n"
+        f"Impulse Alerts: {len(impulse_alerts)}\n"
+        f"Trend Alerts: {len(trend_alerts)}\n"
+        f"Errors: {errors}\n"
+        f"Runtime: {duration} seconds\n"
+    )
+
+    print("\n📊 SCAN SUMMARY")
+    print(summary)
+
     if impulse_alerts or trend_alerts:
-        send_email_alert(impulse_alerts, trend_alerts)
+        send_email_alert(impulse_alerts, trend_alerts, summary)
     else:
-        print("\n✅ No alerts triggered")
+        print("✅ No alerts triggered")
 
 # =======================
 # ENTRY
