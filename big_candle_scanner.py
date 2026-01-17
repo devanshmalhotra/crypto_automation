@@ -1,37 +1,36 @@
 import requests
 import json
 
-url = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/instrument"
+# Get all market details
+url = "https://api.coindcx.com/exchange/v1/markets_details"
 
 try:
     response = requests.get(url)
     response.raise_for_status()
-    data = response.json()
+    markets = response.json()
     
-    # Handle dict structure: data['instrument'] is the single active instrument
-    if isinstance(data, dict) and 'instrument' in data:
-        instrument = data['instrument']
-        pair = instrument.get('pair')
-        status = instrument.get('status')
-        print(f"Futures Instrument Details:")
-        print(f"Pair: {pair}")
-        print(f"Status: {status}")
-        print(f"Kind: {instrument.get('kind')}")
-        print(f"Settle Currency: {instrument.get('settle_currency_short_name')}")
-        pairs = [pair] if status == 'active' else []
-    else:
-        pairs = []
-        print("Unexpected response structure")
+    # Filter futures pairs: typically B-<BASE>_USDT perpetuals (adjust filter as needed)
+    futures_pairs = []
+    for market in markets:
+        pair = market.get('market', '')
+        if pair.startswith('B-') and pair.endswith('_USDT') and 'perpetual' in market.get('description', '').lower():
+            futures_pairs.append({
+                'pair': pair,
+                'base_currency': market.get('base_currency', ''),
+                'quote_currency': market.get('quote_currency', ''),
+                'status': market.get('status', 'unknown')
+            })
     
-    print(f"\nActive Futures Pairs: {pairs}")
-    print(f"Total: {len(pairs)}")
-
-    # Save to JSON
-    with open('coindcx_futures_instrument.json', 'w') as f:
-        json.dump(data, f, indent=2)
-    print("Full data saved to coindcx_futures_instrument.json")
+    print("All Potential Futures Pairs on CoinDCX:")
+    for fp in futures_pairs:
+        print(f"- {fp['pair']} ({fp['base_currency']}/{fp['quote_currency']}) - Status: {fp['status']}")
+    
+    print(f"\nTotal futures-like pairs: {len(futures_pairs)}")
+    
+    # Save full list
+    with open('coindcx_futures_pairs.json', 'w') as f:
+        json.dump(futures_pairs, f, indent=2)
+    print("Saved to coindcx_futures_pairs.json")
 
 except requests.exceptions.RequestException as e:
-    print(f"Error fetching data: {e}")
-except json.JSONDecodeError:
-    print("Invalid JSON response")
+    print(f"Error: {e}")
