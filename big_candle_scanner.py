@@ -1,30 +1,37 @@
 import requests
 import json
 
-# Public API endpoint for futures instruments (no auth required)
 url = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/instrument"
 
 try:
     response = requests.get(url)
-    response.raise_for_status()  # Raise error for bad status codes
+    response.raise_for_status()
     data = response.json()
     
-    # Extract pairs; data is typically a list of instrument dicts
-    if isinstance(data, list):
-        pairs = [item.get('pair', 'N/A') for item in data if item.get('status') == 'active']
+    # Handle dict structure: data['instrument'] is the single active instrument
+    if isinstance(data, dict) and 'instrument' in data:
+        instrument = data['instrument']
+        pair = instrument.get('pair')
+        status = instrument.get('status')
+        print(f"Futures Instrument Details:")
+        print(f"Pair: {pair}")
+        print(f"Status: {status}")
+        print(f"Kind: {instrument.get('kind')}")
+        print(f"Settle Currency: {instrument.get('settle_currency_short_name')}")
+        pairs = [pair] if status == 'active' else []
     else:
-        pairs = [data.get('pair', 'N/A')] if data.get('status') == 'active' else []
+        pairs = []
+        print("Unexpected response structure")
     
-    print("Active Futures Pairs on CoinDCX:")
-    for pair in pairs:
-        print(pair)
-    
-    # Optional: Save to JSON file
-    with open('coindcx_futures_pairs.json', 'w') as f:
-        json.dump(pairs, f, indent=2)
-    print(f"\nTotal pairs: {len(pairs)}. Saved to coindcx_futures_pairs.json")
+    print(f"\nActive Futures Pairs: {pairs}")
+    print(f"Total: {len(pairs)}")
+
+    # Save to JSON
+    with open('coindcx_futures_instrument.json', 'w') as f:
+        json.dump(data, f, indent=2)
+    print("Full data saved to coindcx_futures_instrument.json")
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching data: {e}")
 except json.JSONDecodeError:
-    print("Invalid JSON response from API")
+    print("Invalid JSON response")
