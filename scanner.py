@@ -15,7 +15,7 @@ INSTRUMENTS_URL = "https://www.okx.com/api/v5/public/instruments"
 INTERVAL = "30m"
 TOP_N = 300
 
-IMPULSE_THRESHOLD = 10.0   # single candle %
+IMPULSE_THRESHOLD = 8.0 
 TREND_THRESHOLD = 10.0     # 3-candle cumulative %
 
 REQUEST_TIMEOUT = 10
@@ -25,7 +25,7 @@ SLEEP_BETWEEN_CALLS = 0.2
 # EMAIL CONFIG
 # =======================
 sender_email = "devanshmalhotra98@gmail.com"
-sender_password = "cigl vjac hfxl wrwv"   # Gmail app password
+sender_password = "cigl vjac hfxl wrwv"
 receiver_email = "devanshmalhotra98@gmail.com"
 
 # =======================
@@ -57,7 +57,7 @@ def send_email_alert(impulses, trends, summary):
     body = ""
 
     if impulses:
-        body += "🚨 IMPULSE BREAKOUTS (Single 30m ≥ 10%)\n"
+        body += "🚨 IMPULSE BREAKOUTS (Single 30m ≥ 8%)\n"
         for sym, chg in impulses:
             body += f"{sym}: {chg:.2f}%\n"
         body += "\n"
