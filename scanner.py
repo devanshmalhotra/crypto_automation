@@ -61,7 +61,7 @@ def send_email_alert(impulses, summary):
     body += "\n📊 SUMMARY\n"
     body += summary
 
-    msg = MIM hect= MIMEMultipart()
+    msg = MIMEMultipart()
     msg["From"] = sender_email
     msg["To"] = receiver_email
     msg["Subject"] = subject
