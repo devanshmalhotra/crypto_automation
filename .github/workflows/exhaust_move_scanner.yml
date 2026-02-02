@@ -1,4 +1,4 @@
-name: 30m Big Move detector
+name: Exhaust move detector
 
 "on":
   schedule:
